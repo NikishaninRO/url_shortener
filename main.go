@@ -3,8 +3,12 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"url-shortener/internal/config"
+	"url-shortener/internal/http-server/handlers/url/delete"
+	"url-shortener/internal/http-server/handlers/url/redirect"
+	"url-shortener/internal/http-server/handlers/url/save"
 	"url-shortener/internal/http-server/middelware/logger"
 	"url-shortener/internal/storage/postgres"
 	"url-shortener/lib/logger/sl"
@@ -36,28 +40,36 @@ func main() {
 		os.Exit(1)
 	}
 
-	// id, err := storage.SaveURL("https://google.com", "google")
-	// if err != nil {
-	// 	log.Error("failed to save url", sl.Err(err))
-	// 	os.Exit(1)
-	// }
-
-	// _ = id
-
-	url, err := storage.GetUrl("googl")
-	if err != nil {
-		log.Error("failed to get url", sl.Err(err))
-		os.Exit(1)
-	}
-
-	log.Info("get url", slog.String("url", url))
-
 	router := chi.NewRouter()
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Logger)
 	router.Use(logger.New(log))
 	router.Use(middleware.Recoverer)
 	router.Use(middleware.URLFormat)
+
+	router.Route("/url", func(r chi.Router) {
+		r.Use(middleware.BasicAuth("url-shortener", map[string]string{
+			cfg.HTTPServer.User: cfg.HTTPServer.Password,
+		}))
+
+		r.Post("/", save.New(log, storage))
+		r.Delete("/", delete.New(log, storage))
+	})
+	router.Get("/{alias}", redirect.New(log, storage))
+
+	log.Info("starting server", slog.String("address", cfg.Address))
+
+	srv := &http.Server{
+		Addr:         cfg.Address,
+		Handler:      router,
+		ReadTimeout:  cfg.Timeout,
+		WriteTimeout: cfg.Timeout,
+		IdleTimeout:  cfg.IdleTimeout,
+	}
+
+	if err := srv.ListenAndServe(); err != nil {
+		log.Error("failed to start server")
+	}
 }
 
 func setupLogger(env string) *slog.Logger {
